@@ -119,7 +119,7 @@ def create_sweep_objective(train_func, data_tensors, data_vocab, language='tel')
         eng_vocab, tel_vocab = data_vocab
         
         # Train model with swept parameters
-        train_func(
+        _, (_, valid_acc, _), _ = train_func(
             config.cell,
             config.bidirectional,
             config.emb_size,
@@ -139,5 +139,8 @@ def create_sweep_objective(train_func, data_tensors, data_vocab, language='tel')
             language,
             True  # use_wandb
         )
+        
+        # Log validation accuracy for optimization
+        wandb.log({"val_acc": valid_acc})
     
     return objective
