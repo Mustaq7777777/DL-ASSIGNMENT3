@@ -40,8 +40,8 @@ def argument_parsing():
     parser.add_argument('-ct', '--cell_type', type=str, default='GRU',
                         choices=['RNN', 'GRU', 'LSTM'],
                         help='RNN cell type')
-    parser.add_argument('-bi', '--bi_directional_bit', type=bool, default=True,
-                        help='Whether to use bidirectional encoder')
+    parser.add_argument('-bi', '--bi_directional_bit', type=lambda x: (str(x).lower() == 'true'), 
+                        default=True, help='Whether to use bidirectional encoder')
     parser.add_argument('-e_lay', '--enc_layers', type=int, default=2,
                         help='Number of encoder layers')
     parser.add_argument('-d_lay', '--dec_layers', type=int, default=2,
@@ -50,8 +50,8 @@ def argument_parsing():
                         help='Size of embeddings')
     parser.add_argument('-h_size', '--hidden_size', type=int, default=512,
                         help='Size of hidden states')
-    parser.add_argument('-attn', '--attention_bit', type=bool, default=True,
-                        help='Whether to use attention mechanism')
+    parser.add_argument('-attn', '--attention_bit', type=lambda x: (str(x).lower() == 'true'), 
+                        default=True, help='Whether to use attention mechanism')
     
     # Training parameters
     parser.add_argument('-b_size', '--batch_size', type=int, default=64,
@@ -68,12 +68,12 @@ def argument_parsing():
     # Weights & Biases parameters
     parser.add_argument('-wp', '--wandb_project', type=str, default='DL_assignment_3',
                         help='Weights & Biases project name')
-    parser.add_argument('-use_wandb', '--use_wandb', type=bool, default=False,
-                        help='Whether to log metrics to Weights & Biases')
+    parser.add_argument('-use_wandb', '--use_wandb', type=lambda x: (str(x).lower() == 'true'), 
+                        default=False, help='Whether to log metrics to Weights & Biases')
     
     # Hyperparameter sweep
-    parser.add_argument('-sweep', '--run_sweep', type=bool, default=False,
-                        help='Whether to run hyperparameter sweep')
+    parser.add_argument('-sweep', '--run_sweep', type=lambda x: (str(x).lower() == 'true'), 
+                        default=False, help='Whether to run hyperparameter sweep')
     parser.add_argument('-sweep_count', '--sweep_count', type=int, default=20,
                         help='Number of runs for hyperparameter sweep')
     
