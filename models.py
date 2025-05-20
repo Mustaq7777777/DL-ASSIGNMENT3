@@ -71,8 +71,9 @@ class Encoder(nn.Module):
         # Get actual batch size from input
         actual_batch_size = x.shape[1]
         
-        # Apply embedding without hardcoded reshaping
+        # Apply embedding and dropout
         embedding = self.embedding(x)
+        embedding = self.dropout(embedding)
         
         # Pass through the appropriate RNN type
         if self.cell_type == "RNN":
@@ -101,10 +102,9 @@ class Encoder(nn.Module):
         # Use provided batch size if available, otherwise use default
         actual_batch_size = batch_size if batch_size is not None else self.batch_size
         
-        if self.bi_directional_bit:
-            return torch.zeros(2 * self.enc_layers, actual_batch_size, 
-                               self.hidden_size, device=device)
-        return torch.zeros(self.enc_layers, actual_batch_size, 
+        # For bidirectional encoders, we need 2 * num_layers hidden states
+        multiplier = 2 if self.bi_directional_bit else 1
+        return torch.zeros(multiplier * self.enc_layers, actual_batch_size, 
                            self.hidden_size, device=device)
     
     def initialize_cell(self, batch_size=None):
@@ -123,10 +123,9 @@ class Encoder(nn.Module):
         # Use provided batch size if available, otherwise use default
         actual_batch_size = batch_size if batch_size is not None else self.batch_size
         
-        if self.bi_directional_bit:
-            return torch.zeros(2 * self.enc_layers, actual_batch_size, 
-                               self.hidden_size, device=device)
-        return torch.zeros(self.enc_layers, actual_batch_size, 
+        # For bidirectional encoders, we need 2 * num_layers cell states
+        multiplier = 2 if self.bi_directional_bit else 1
+        return torch.zeros(multiplier * self.enc_layers, actual_batch_size, 
                            self.hidden_size, device=device)
 
 class Decoder(nn.Module):
@@ -173,7 +172,7 @@ class Decoder(nn.Module):
         # Output projection layer
         self.fully_conc = nn.Linear(hidden_size, output_size)
     
-    def forward(self, x, prev_output, prev_hidden, cell=0):
+    def forward(self, x, prev_output, prev_hidden, cell=None):
         """
         Forward pass through the decoder.
         
@@ -197,6 +196,8 @@ class Decoder(nn.Module):
         elif self.cell_type == "GRU":
             outputs, hidden = self.gru(embedding, prev_hidden)
         else:  # LSTM
+            if cell is None:
+                cell = torch.zeros_like(prev_hidden)
             outputs, (hidden, cell) = self.lstm(embedding, (prev_hidden, cell))
         
         # Project to vocabulary size
@@ -303,13 +304,12 @@ class AttentionDecoder(nn.Module):
         # Embedding layer
         self.embedding = nn.Embedding(input_size, embedding_size)
         
-        # Attention mechanism - FIXED: Properly account for bidirectional encoder
+        # Attention mechanism - account for bidirectional encoder
         # If bidirectional, encoder outputs have 2x the hidden_size
         enc_hid_dim = hidden_size * 2 if bi_directional_bit else hidden_size
         self.attention = BahdanauAttention(enc_hid_dim, hidden_size)
         
         # RNN input dimension (embedding + context)
-        # FIXED: Context vector size depends on bidirectional encoder
         self.rnn_input_dim = embedding_size + enc_hid_dim
         
         # Initialize RNN based on cell type
@@ -321,10 +321,10 @@ class AttentionDecoder(nn.Module):
             self.rnn = nn.RNN(self.rnn_input_dim, hidden_size, dec_layers, dropout=dropout)
         
         # Output projection (combines hidden state, context vector, and embedding)
-        # FIXED: Context vector size depends on bidirectional encoder
+        # Context vector size depends on bidirectional encoder
         self.fully_conc = nn.Linear(hidden_size + enc_hid_dim + embedding_size, output_size)
     
-    def forward(self, x, encoder_outputs, prev_hidden, cell=0):
+    def forward(self, x, encoder_outputs, prev_hidden, cell=None):
         """
         Forward pass with attention mechanism.
         
@@ -339,8 +339,10 @@ class AttentionDecoder(nn.Module):
         """
         # Get the last layer's hidden state for attention
         if self.cell_type == 'LSTM':
-            attention_hidden = prev_hidden[0][-1]
+            # For LSTM, get the hidden state (not cell state)
+            attention_hidden = prev_hidden[-1]
         else:
+            # For GRU and RNN, just get the last layer
             attention_hidden = prev_hidden[-1]
         
         # Calculate attention weights
@@ -370,6 +372,8 @@ class AttentionDecoder(nn.Module):
         elif self.cell_type == "GRU":
             outputs, hidden = self.gru(rnn_input, prev_hidden)
         else:  # LSTM
+            if cell is None:
+                cell = torch.zeros_like(prev_hidden)
             outputs, (hidden, cell) = self.lstm(rnn_input, (prev_hidden, cell))
         
         # For output projection, combine hidden state, context, and embedded input
@@ -450,28 +454,74 @@ class Seq2Seq(nn.Module):
         # Handle bidirectional encoder or different layer counts
         if self.decoder_layers != self.encoder_layers or self.bidirectional_bit:
             if self.cell_type in ["RNN", "GRU", "LSTM"]:
-                # Combine bidirectional hidden states if needed
+                # Convert bidirectional encoder hidden states
                 if self.bidirectional_bit:
-                    # Sum forward and backward directions
+                    # Combine forward and backward directions
                     hidden_forward = hidden[:self.encoder_layers]
                     hidden_backward = hidden[self.encoder_layers:]
-                    hidden = hidden_forward + hidden_backward
+                    # Sum the forward and backward hidden states
+                    hidden_combined = hidden_forward + hidden_backward
+                    
+                    # Create a new tensor for the decoder
+                    hidden_decoder = torch.zeros(self.decoder_layers, batch_size, 
+                                              self.encoder.hidden_size, device=device)
+                    
+                    # Fill the decoder hidden state
+                    for i in range(self.decoder_layers):
+                        if i < self.encoder_layers:
+                            hidden_decoder[i] = hidden_combined[i]
+                        else:
+                            # Repeat the last layer for extra decoder layers
+                            hidden_decoder[i] = hidden_combined[-1]
+                    
+                    hidden = hidden_decoder
                 
-                # Match decoder layers
-                if self.decoder_layers > 1 and self.encoder_layers == 1:
-                    hidden = hidden.repeat(self.decoder_layers, 1, 1)
+                # Match decoder layers if needed (without bidirectional)
+                elif self.decoder_layers > self.encoder_layers:
+                    hidden_decoder = torch.zeros(self.decoder_layers, batch_size, 
+                                             self.encoder.hidden_size, device=device)
+                    
+                    for i in range(self.decoder_layers):
+                        if i < self.encoder_layers:
+                            hidden_decoder[i] = hidden[i]
+                        else:
+                            hidden_decoder[i] = hidden[-1]
+                    
+                    hidden = hidden_decoder
             
+            # Handle cell states for LSTM
             if self.cell_type == "LSTM":
-                # Also handle cell states for LSTM
                 if self.bidirectional_bit:
-                    # Sum forward and backward directions
+                    # Combine forward and backward directions
                     cell_forward = cell[:self.encoder_layers]
                     cell_backward = cell[self.encoder_layers:]
-                    cell = cell_forward + cell_backward
+                    cell_combined = cell_forward + cell_backward
+                    
+                    # Create a new tensor for the decoder
+                    cell_decoder = torch.zeros(self.decoder_layers, batch_size, 
+                                           self.encoder.hidden_size, device=device)
+                    
+                    # Fill the decoder cell state
+                    for i in range(self.decoder_layers):
+                        if i < self.encoder_layers:
+                            cell_decoder[i] = cell_combined[i]
+                        else:
+                            cell_decoder[i] = cell_combined[-1]
+                    
+                    cell = cell_decoder
                 
-                # Match decoder layers
-                if self.decoder_layers > 1 and self.encoder_layers == 1:
-                    cell = cell.repeat(self.decoder_layers, 1, 1)
+                # Match decoder layers if needed (without bidirectional)
+                elif self.decoder_layers > self.encoder_layers:
+                    cell_decoder = torch.zeros(self.decoder_layers, batch_size, 
+                                          self.encoder.hidden_size, device=device)
+                    
+                    for i in range(self.decoder_layers):
+                        if i < self.encoder_layers:
+                            cell_decoder[i] = cell[i]
+                        else:
+                            cell_decoder[i] = cell[-1]
+                    
+                    cell = cell_decoder
         
         # Start with first token (SOS token)
         x = target[0]
