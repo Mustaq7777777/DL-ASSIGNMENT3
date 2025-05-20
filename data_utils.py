@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import subprocess
 import time
+import requests
 
 def get_standard_language_code(language):
     """
@@ -75,7 +76,6 @@ def download_and_extract_dataset():
                 print("Trying alternative download method...")
                 try:
                     # Alternative download with Python requests
-                    import requests
                     url = "https://storage.googleapis.com/gresearch/dakshina/dakshina_dataset_v1.0.tar"
                     print(f"Downloading from {url}...")
                     r = requests.get(url, stream=True)
